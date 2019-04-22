@@ -1,0 +1,171 @@
+---
+title: "Astroscreen"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(DBI)
+library(quanteda)
+library(stringr)
+library(ggplot2)
+```
+PartA:
+1.Data cleaning and exploratory data analysis:
+```{r}
+db <- dbConnect(RSQLite::SQLite(), "twitter.sqlite" )
+d <- read.csv("/Users/JaxLiu/Downloads/russia_201901_1_tweets_csv_hashed.csv", stringsAsFactors = F)
+d$tweet_time <- as.character(as.Date(d$tweet_time))
+d2 <- read.csv("/Users/JaxLiu/Downloads/russia_201901_1_users_csv_hashed.csv")
+
+#dbWriteTable(db, "twitter", d)
+
+dbGetQuery(db, "SELECT COUNT(*) FROM twitter WHERE is_retweet = 'True'")
+#593287 tweeets are retweet, which occupies 78% of total tweets.
+
+##Date pattern:
+time <- dbGetQuery(db, "SELECT COUNT(*) AS number_of_tweets, tweet_time FROM twitter WHERE is_retweet = 'False' GROUP BY tweet_time")
+p <- ggplot(time, aes(x=as.Date(tweet_time), y=log(number_of_tweets)))
+p + geom_line(colour = 'dark blue') + xlab('The Time Series of Date')
+
+retweet_time<- dbGetQuery(db, "SELECT COUNT(*) AS number_of_retweets, tweet_time FROM twitter WHERE is_retweet = 'True' GROUP BY tweet_time")
+p <- ggplot(retweet_time, aes(x=as.Date(tweet_time), y=log(number_of_retweets)))
+p + geom_line(colour = 'dark blue') + xlab('The Time Series of Date')
+
+#Tetweets and tweets have the similar pattern over time. Both of them concentrated on 2015-2018. 
+
+##retweets pattern:
+retweets <- dbGetQuery(db, "SELECT userid, follower_count, 1.0*SUM(CASE WHEN is_retweet = 'True' THEN 1 ELSE 0 END)/COUNT(*) AS retweet_percentage, 1.0*SUM(CASE WHEN is_retweet = 'True' THEN 1 ELSE 0 END) AS retweets, COUNT(*) AS total_tweets FROM twitter GROUP BY userid")
+
+p <- ggplot(retweets, aes(x = retweet_percentage))
+p + geom_density(fill = "blue", alpha = 0.2)
+
+p <- ggplot(retweets, aes(x = log(retweets)))
+p + geom_density(fill = "blue", alpha = 0.2)
+
+p <- ggplot(retweets, aes(x=log(follower_count), y=log(retweets)))
+p + geom_point()+
+  theme_bw() +
+  stat_smooth(method="lm") +
+  scale_x_continuous("Number of followers(log form)") +
+  scale_y_continuous("Number of retweets(log form)")
+
+p <- ggplot(retweets, aes(x=log(retweets), y=log(retweet_percentage)))
+p + geom_point()+
+  theme_bw() +
+  stat_smooth(method="lm") +
+  scale_x_continuous("Number of retweets(log form)") +
+  scale_y_continuous("Retweets' percentage")
+#
+
+dbGetQuery(db, "SELECT userid, follower_count, 1.0*SUM(CASE WHEN is_retweet = 'True' THEN 1 ELSE 0 END)/COUNT(*) AS retweet_percentage, COUNT(*) AS total_tweets FROM twitter GROUP BY userid ORDER BY total_tweets DESC LIMIT 20")
+```
+*The descriptive statistics shows that the retweets' proportion is very high (about 78%), and some accounts with a large number of retweets have a very high retweets rate that more than 90%. The scatter graph shows that these russian accounts with more followers have more retweets, suggesting that the job of accounts with more followers is to amplify controversial topics by retweets*
+
+2. The most frequently used Hashtags and words:
+```{r}
+hashtable <- function(d){
+  hashtags <- str_extract_all(d, '#[A-Za-z0-9_]+')
+  hashtags_vector <- unlist(hashtags)
+  head(sort(table(hashtags_vector), decreasing = TRUE), n=20)
+}
+tweets <- d[, 'tweet_text']
+hashtable(tweets)
+
+#The most frequently used words
+words <- corpus(tweets)
+words_dfm <- dfm(words, tolower=TRUE, verbose=TRUE, remove_punct = TRUE, remove=c(stopwords("english"), "t.co", "https", "rt", "http", "via", "just", "t"))
+topfeatures(words_dfm, 25)
+textplot_wordcloud(words_dfm, min_size = 0.4, max_size = 4)
+```
+
+3. Time patterns for these frequently used hashtags:
+```{r}
+#ReleaseTheMemo
+R_time <- d[grep('#ReleaseTheMemo', d$tweet_text, ignore.case=TRUE), "tweet_time"]
+plot(table(R_time))
+
+R_time <- d[grep('#MAGA', d$tweet_text, ignore.case=TRUE), "tweet_time"]
+plot(table(R_time))
+
+R_time <- d[grep('#IslamIsTheProblem', d$tweet_text, ignore.case=TRUE), "tweet_time"]
+plot(table(R_time))
+
+R_time <- d[grep('#QAnon', d$tweet_text, ignore.case=TRUE), "tweet_time"]
+plot(table(R_time))
+#relatively stable distribution, suggesting that these accounts keep spreading the conspiracy theory
+
+R_time <- d[grep('#Trump2016', d$tweet_text, ignore.case=TRUE), "tweet_time"]
+plot(table(R_time))
+#The Russian account did support Trump for 2016 Presidential election 
+```
+*It can be seen from the above, the most frequently used hash tags can be classified to 3 categories: conspiracy theory, trump's populist slogans and hate words(especially aboout Islam). As the hashtags can reflects a tweet's topics, the hashtag table indicates that Russian accounts tend to spread the disinformation that are extremely controversial, scepticist and seditious, which is likely aimed at dividing the public and making chaos in the United States.*
+
+*The most frequently used hash tag is "ReleaseTheMemo" spread during the mid-late Janunary of 2018, which is a rallying cry for the right and Trump supporters (especially on Twitter), who want released to the public a memo written by Republican Rep. Devin Nunes (R-CA) that they believe would permanently damage special counsel Robert Mueller’s investigation into Trump’s 2016 campaign that wiretapped by the Obama administration. The #releasethememo campaign succeeded to dominate political discussions in the United States for days in the late January. #releasethememo provided an organizational framework for this comprehensive conspiracy theory, which, in its underpinnings, is meant to minimize and muddle concerns about Russian interference in American politics andto discredit some members of the FBI and the Obama administration.*
+
+*Another conspiracy theory hash tag is #Qanon, which is a baseless conspiracy theory that claims Mueller and Trump are secretly working together to take down a global pedophile ring run by celebrities and Democratic politicians. However, the spread of this hash tag is not like #ReleaseTheMemo that exploded on a short time period, it is more stable spread in the first half of 2018.*
+
+*The hashtags #IslamIsTheProblem, #StopImportingIslam and #BanShariaLaw were mostly used in 2017, this perhaps Trump signed Islam travel ban in the beginning of 2017. The accounts attempted to emulate Americans on both sides of the political aisle, and amplified the divide and hate betweenboth sides.*
+
+*Time pattern of #Trump2016 suggests that the Russian accounts did support Trump's campaign for the 2016 presidential elections during the year 2016.*
+
+4. Network Analysis:
+```{r}
+library(igraph)
+library(dplyr)
+require(scales)
+library(forecast)
+#retweet network
+retweetedge <- subset(d,d$is_retweet=="True")
+
+#d3 <- d[match(d2$userid, d$retweet_userid),]
+d3 <- d[d$retweet_userid %in% d2$userid,]
+
+retweetedge2 <- d3[, c("userid", "retweet_userid", "follower_count")]
+weight <- group_size(group_by(retweetedge2,userid,retweet_userid))
+retweetedge2 <- retweetedge2[!duplicated(retweetedge2),]
+retweetedge2$retweet_userid <- as.character(retweetedge2$retweet_userid)
+g2<- graph.edgelist(as.matrix(retweetedge2)[,1:2])
+followers <- unique(retweetedge2$follower_count)
+V(g2)$followers <- log(unique(retweetedge2$follower_count))
+plot(g2, vertex.label.cex = 0.5, vertex.size = rescale(V(g2)$followers, c(1,20)), edge.width = rescale(weight, c(1, 10)), edge.arrow.size = 0.5)
+
+selfretweet <- dbGetQuery(db, "SELECT COUNT(*) AS selfretweets, tweet_time FROM twitter WHERE userid = retweet_userid GROUP BY tweet_time")
+
+p <- ggplot(selfretweet, aes(x=as.Date(tweet_time), y=log(selfretweets)))
+p + geom_line(colour = 'dark blue') + xlab('The Time Series of Date')
+```
+*The retweet netowork shows a clear parttern about how these Russian accounts retweet each other. The two nodes "2980186012", and "845488340686139392" are the centers of retweeted, which are retweeted by the other accounts with large number of followers and are more retweeded by themselves. The self-retweets concentrated on 2016.06-2017.09, amplifing the spread of Trump's populist words, and the hate speech about Islam*
+
+4. Network Analysis for reply network:
+```{r}
+#in reply to network:
+inreplyedge <- d[!is.na(d$in_reply_to_userid),]
+
+d3 <- d[match(d2$userid, d$in_reply_to_userid),]
+d3 <- d[d$in_reply_to_userid %in% d2$userid,]
+
+inreplyedge <- d3[, c("userid", "in_reply_to_userid", "follower_count")]
+weight <- group_size(group_by(inreplyedge,userid,in_reply_to_userid))
+inreplyedge <- inreplyedge[!duplicated(inreplyedge),]
+inreplyedge$in_reply_to_userid <- as.character(inreplyedge$in_reply_to_userid)
+g2<- graph.edgelist(as.matrix(inreplyedge)[,1:2])
+followers <- unique(inreplyedge$follower_count)
+V(g2)$followers <- log(unique(inreplyedge$follower_count))
+V(g2)$followers
+summary(g2)
+plot(g2, vertex.label.cex = 0.5, vertex.size = rescale(V(g2)$followers, c(1,20)), edge.width = rescale(weight, c(1, 10)), edge.arrow.size = 0.5)
+```
+*The reply netowork shows a similar parttern with retweet network, however the amount is not as large as retweets*
+
+
+*In Conclusion, the basic anatomy of the attack is the accounts with large amount of followers retweets intensively the extremely controversial, scepticist and seditious topics to amplify. Some accounts self-retweeted the same tweets across time to keep the controversial topic hot. The aim may be dividing the American public, making chaos in the United States and intevene elections, or even minimizing and muddling concerns about Russian interference in American politics and discredit the Obama administration and Democratic party.*
+
+
+Part B:
+
+*Based on this investigation, I suggest to create software programs to get these abilities for better identify disinformation attacks: 1. the ability to identify the accounts in a seditious topic that frequently self-retweet and self-reply the same message accross different time, 2.ability to identify the abnormal seditious topics amplification with extreme high retweets rate 3. the ability to identify the accounts in a given topic that almost only retweet (suggested benchmark: 90%)" *
